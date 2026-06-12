@@ -71,15 +71,18 @@ const InputDialog = GObject.registerClass(
         return;
       }
 
+      let scriptPath = this._extension
+        .getSettings()
+        .get_string(SCRIPT_PATH_KEY);
+      if (!scriptPath) {
+        scriptPath = `${this._extension.path}/ime-bridge.sh`;
+      }
+
       let launcher;
 
       try {
         launcher = Gio.Subprocess.new(
-          [
-            "bash",
-            this._extension.getSettings().get_string(SCRIPT_PATH_KEY),
-            text,
-          ],
+          ["bash", scriptPath, text],
           Gio.SubprocessFlags.NONE,
         );
       } catch (error) {

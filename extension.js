@@ -78,6 +78,18 @@ const InputDialog = GObject.registerClass(
         scriptPath = `${this._extension.path}/ime-bridge.sh`;
       }
 
+      if (!GLib.file_test(scriptPath, GLib.FileTest.EXISTS)) {
+        Main.notify("输入法桥接", `脚本不存在：${scriptPath}`);
+        this.close();
+        return;
+      }
+
+      if (!GLib.file_test(scriptPath, GLib.FileTest.IS_REGULAR)) {
+        Main.notify("输入法桥接", `脚本路径不是普通文件：${scriptPath}`);
+        this.close();
+        return;
+      }
+
       let launcher;
 
       try {

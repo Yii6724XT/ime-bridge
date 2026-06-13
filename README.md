@@ -1,7 +1,7 @@
 # IME Bridge
-该扩展通过全局快捷键打开一个 GNOME Shell 输入框，收集输入并转发给一个自定义脚本。专门针对哪些无法使用输入法的顽固场景。
+该扩展通过全局快捷键打开一个 GNOME Shell 输入框，收集输入并转发给一个自定义脚本。专门针对那些无法使用输入法的顽固场景。
 
-如果不设置自定义脚本的话，该扩展也提供了一个默认脚本，用途是将将输入粘贴到 gamescope 内的 X 剪切板（优先）或者其他 X 剪切板（次要）。脚本依赖 [xclip](https://github.com/astrand/xclip) 和 [ydotool](https://github.com/ReimuNotMoe/ydotool) 工作。
+如果不设置自定义脚本的话，该扩展也提供了一个默认脚本，用途是将输入粘贴到 gamescope 内的 X 剪切板（优先）或者其他 X 剪切板（次要）。脚本依赖 [xclip](https://github.com/astrand/xclip) 和 [ydotool](https://github.com/ReimuNotMoe/ydotool) 工作。
 
 ## 使用方法
 
@@ -16,7 +16,8 @@
 - GNOME Shell 50（其他版本未测试）
 - Fcitx5 已经安装并正常运行
 - 不支持 iBus
-- xclip 和 ydotool 均已安装，ydotoold 正在运行
+
+如果要使用扩展自带的脚本，还需要确保 xclip 和 ydotool 均已安装，且 ydotoold 正在运行
 
 ### 当前仅支持源码安装
 

@@ -17,6 +17,3 @@ Thumbs.db
 .vscode/
 *.sublime-*
 .zed/
-
-# 编译生成的 GSettings 模式文件
-schemas/gschemas.compiled

@@ -9,9 +9,54 @@ import St from "gi://St";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as ModalDialog from "resource:///org/gnome/shell/ui/modalDialog.js";
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
+import {
+  getInputSourceManager,
+  INPUT_SOURCE_TYPE_IBUS,
+} from "resource:///org/gnome/shell/ui/status/keyboard.js";
 
 const SCRIPT_PATH_KEY = "script-path";
 const OPEN_DIALOG_KEY = "open-dialog";
+const IM_FRAMEWORK_KEY = "im-framework";
+
+const FCITX5_DAEMON = "org.fcitx.Fcitx5";
+const IBUS_DAEMON = "org.freedesktop.IBus";
+
+/** Ask the session bus whether a D-Bus name is currently owned. */
+function hasDbusName(name) {
+  try {
+    return Gio.DBus.session
+      .call_sync(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+        new GLib.Variant("(s)", [name]),
+        new GLib.VariantType("(b)"),
+        Gio.DBusCallFlags.NONE,
+        500,
+        null,
+      )
+      .deepUnpack()[0];
+  } catch (e) {
+    log(`[ime-bridge] Failed to check name owner of ${name}: ${e.message}`);
+    return false;
+  }
+}
+
+/**
+ * Whether the session environment declares a given input method module.
+ * GNOME (and the IM daemons themselves) export this through
+ * GTK_IM_MODULE / QT_IM_MODULE / XMODIFIERS (e.g. `@im=ibus`).
+ */
+function envUses(framework) {
+  const module = framework === "ibus" ? "ibus" : "fcitx";
+  for (const key of ["GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"]) {
+    const value = GLib.getenv(key);
+    if (value && value.includes(module))
+      return true;
+  }
+  return false;
+}
 
 const InputDialog = GObject.registerClass(
   class InputDialog extends ModalDialog.ModalDialog {
@@ -126,40 +171,130 @@ export default class ImeBridgeExtension extends Extension {
       Shell.ActionMode.ALL,
       () => this._openDialog(),
     );
+
+    this._imFramework = null;
+    this._previousFcitxIm = null;
+    this._ibusPrevSourceId = null;
+    this._ibusSwitched = false;
+
+    log(`[ime-bridge] IM framework detected: ${this._detectImFramework()}`);
   }
 
   disable() {
     Main.wm.removeKeybinding(OPEN_DIALOG_KEY);
-    this._dialog?.destroy();
-    this._dialog = null;
+
+    // Restore the input source before tearing the dialog down, in case
+    // the extension is disabled while the dialog is still open.
+    if (this._dialog) {
+      this._restoreInputSource();
+      this._dialog.destroy();
+      this._dialog = null;
+    }
+
     this._settings = null;
   }
 
+  /**
+   * Figure out which input method framework is in use:
+   *   1. explicit user choice from the settings;
+   *   2. whatever daemon is running on the session bus
+   *      (env vars break the tie when both are running);
+   *   3. env vars alone (daemon may still be starting up).
+   * Returns "fcitx5", "ibus" or "none".
+   */
+  _detectImFramework() {
+    const override = this._settings.get_string(IM_FRAMEWORK_KEY);
+    if (override === "fcitx5" || override === "ibus")
+      return override;
+
+    const fcitxRunning = hasDbusName(FCITX5_DAEMON);
+    const ibusRunning = hasDbusName(IBUS_DAEMON);
+    const fcitxEnv = envUses("fcitx5");
+    const ibusEnv = envUses("ibus");
+
+    if (fcitxRunning && !ibusRunning)
+      return "fcitx5";
+    if (ibusRunning && !fcitxRunning)
+      return "ibus";
+    if (fcitxRunning && ibusRunning) {
+      // Both daemons alive: trust the environment, fall back to the
+      // historically supported framework when it is ambiguous.
+      if (fcitxEnv && !ibusEnv)
+        return "fcitx5";
+      if (ibusEnv && !fcitxEnv)
+        return "ibus";
+      return "fcitx5";
+    }
+    if (fcitxEnv)
+      return "fcitx5";
+    if (ibusEnv)
+      return "ibus";
+    return "none";
+  }
+
+  /**
+   * Prepare the input method for the dialog.
+   *
+   * - Fcitx5 is switched right away, before the dialog steals focus
+   *   (the switch is applied by Fcitx5 itself to the focused window).
+   * - IBus engines are driven by GNOME Shell's input source manager,
+   *   and Shell may re-apply its own source when the dialog window
+   *   gains focus (per-window sources). Remember the state *now*, then
+   *   do the actual switch once the dialog is fully open and focused.
+   */
   _switchInputSource() {
+    switch (this._imFramework) {
+      case "fcitx5":
+        this._switchFcitxToIme();
+        break;
+      case "ibus": {
+        this._ibusSwitched = false;
+        const current = getInputSourceManager().currentSource;
+        this._ibusPrevSourceId = current ? current.id : null;
+        this._dialog.connect("opened", () => this._switchIbusToIme());
+        break;
+      }
+      default:
+        log(`[ime-bridge] No supported IM framework found (${this._imFramework})`);
+    }
+  }
+
+  _restoreInputSource() {
+    switch (this._imFramework) {
+      case "fcitx5":
+        this._restoreFcitx();
+        break;
+      case "ibus":
+        this._restoreIbus();
+        break;
+    }
+    this._imFramework = null;
+  }
+
+  // ── Fcitx5 backend (driven directly over D-Bus) ────────────────
+
+  _fcitxCall(method, replyType, signature, params) {
+    return Gio.DBus.session.call_sync(
+      FCITX5_DAEMON,
+      "/controller",
+      "org.fcitx.Fcitx.Controller1",
+      method,
+      params ? new GLib.Variant(signature, params) : null,
+      replyType ? new GLib.VariantType(replyType) : null,
+      Gio.DBusCallFlags.NONE,
+      500,
+      null,
+    );
+  }
+
+  _switchFcitxToIme() {
     try {
-      const curResult = Gio.DBus.session.call_sync(
-        "org.fcitx.Fcitx5",
-        "/controller",
-        "org.fcitx.Fcitx.Controller1",
-        "CurrentInputMethod",
-        null,
-        new GLib.VariantType("(s)"),
-        Gio.DBusCallFlags.NONE,
-        500,
-        null,
-      );
+      const curResult = this._fcitxCall("CurrentInputMethod", "(s)");
       const [currentIM] = curResult.deepUnpack();
 
-      const imResult = Gio.DBus.session.call_sync(
-        "org.fcitx.Fcitx5",
-        "/controller",
-        "org.fcitx.Fcitx.Controller1",
+      const imResult = this._fcitxCall(
         "AvailableInputMethods",
-        null,
-        new GLib.VariantType("(a(ssssssb))"),
-        Gio.DBusCallFlags.NONE,
-        500,
-        null,
+        "(a(sssssssb))",
       );
 
       const methods = imResult.deepUnpack()[0];
@@ -169,23 +304,13 @@ export default class ImeBridgeExtension extends Extension {
 
       if (currentIsIME) return;
 
-      this._previousIM = currentIM;
+      this._previousFcitxIm = currentIM;
 
       for (const m of methods) {
-        const [id, _name, _label, icon, _code, _lang, _enabled] = m;
+        const [id, _name, _label, icon] = m;
         if (icon === "input-keyboard") continue;
 
-        Gio.DBus.session.call_sync(
-          "org.fcitx.Fcitx5",
-          "/controller",
-          "org.fcitx.Fcitx.Controller1",
-          "SetCurrentIM",
-          new GLib.Variant("(s)", [id]),
-          null,
-          Gio.DBusCallFlags.NONE,
-          500,
-          null,
-        );
+        this._fcitxCall("SetCurrentIM", null, "(s)", [id]);
         return;
       }
     } catch (e) {
@@ -193,27 +318,75 @@ export default class ImeBridgeExtension extends Extension {
     }
   }
 
-  _restoreInputSource() {
-    if (this._previousIM === null || this._previousIM === undefined) return;
+  _restoreFcitx() {
+    if (this._previousFcitxIm === null || this._previousFcitxIm === undefined)
+      return;
 
     try {
-      Gio.DBus.session.call_sync(
-        "org.fcitx.Fcitx5",
-        "/controller",
-        "org.fcitx.Fcitx.Controller1",
+      this._fcitxCall(
         "SetCurrentIM",
-        new GLib.Variant("(s)", [this._previousIM]),
         null,
-        Gio.DBusCallFlags.NONE,
-        500,
-        null,
+        "(s)",
+        [this._previousFcitxIm],
       );
     } catch (e) {
       log(`[ime-bridge] Failed to restore IM: ${e.message}`);
     }
 
-    this._previousIM = null;
+    this._previousFcitxIm = null;
   }
+
+  // ── IBus backend (via GNOME Shell input sources) ───────────────
+
+  _inputSources() {
+    return Object.values(getInputSourceManager().inputSources);
+  }
+
+  _switchIbusToIme() {
+    if (!this._dialog)
+      return;
+
+    const current = getInputSourceManager().currentSource;
+
+    // Already typing with an IME: nothing to switch.
+    if (current && current.type === INPUT_SOURCE_TYPE_IBUS)
+      return;
+
+    const sources = this._inputSources();
+    const ime = sources.find((s) => s.type === INPUT_SOURCE_TYPE_IBUS);
+
+    if (!ime) {
+      log("[ime-bridge] No IBus input source configured in GNOME");
+      return;
+    }
+
+    ime.activate(false);
+    this._ibusSwitched = true;
+  }
+
+  _restoreIbus() {
+    if (!this._ibusSwitched)
+      return;
+
+    this._ibusSwitched = false;
+    const prevId = this._ibusPrevSourceId;
+    this._ibusPrevSourceId = null;
+
+    if (prevId === null || prevId === undefined)
+      return;
+
+    try {
+      const prev = this._inputSources().find((s) => s.id === prevId);
+      if (prev)
+        prev.activate(false);
+      else
+        log(`[ime-bridge] Previous input source "${prevId}" no longer exists`);
+    } catch (e) {
+      log(`[ime-bridge] Failed to restore input source: ${e.message}`);
+    }
+  }
+
+  // ── Dialog handling ────────────────────────────────────────────
 
   _openDialog() {
     if (this._dialog) {
@@ -221,9 +394,11 @@ export default class ImeBridgeExtension extends Extension {
       return;
     }
 
+    this._imFramework = this._detectImFramework();
+    this._dialog = new InputDialog(this);
+
     this._switchInputSource();
 
-    this._dialog = new InputDialog(this);
     this._dialog.connect("closed", () => {
       this._restoreInputSource();
       this._dialog?.destroy();

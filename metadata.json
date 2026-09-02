@@ -1,9 +1,9 @@
 {
   "uuid": "ime-bridge@yii6724xt",
   "name": "IME Bridge",
-  "description": "Collect text from a GNOME Shell dialog and pass it to a script.",
+  "description": "Collect text from a GNOME Shell dialog and pass it to a script. Supports Fcitx5 and IBus.",
   "settings-schema": "org.gnome.shell.extensions.ime-bridge",
   "shell-version": ["50"],
-  "version": 1,
+  "version": 2,
   "url": "https://github.com/Yii6724XT/ime-bridge"
 }

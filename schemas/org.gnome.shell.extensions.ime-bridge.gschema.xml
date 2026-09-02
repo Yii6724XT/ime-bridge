@@ -10,5 +10,10 @@
       <summary>Open dialog shortcut</summary>
       <description>Global shortcut used to open the input dialog.</description>
     </key>
+    <key name="im-framework" type="s">
+      <default>'auto'</default>
+      <summary>Input method framework</summary>
+      <description>Which input method framework to drive: 'auto' (detect the running framework), 'fcitx5' or 'ibus'.</description>
+    </key>
   </schema>
 </schemalist>

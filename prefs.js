@@ -6,6 +6,10 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 
 const SCRIPT_PATH_KEY = 'script-path';
 const OPEN_DIALOG_KEY = 'open-dialog';
+const IM_FRAMEWORK_KEY = 'im-framework';
+
+const IM_FRAMEWORK_KEYS = ['auto', 'fcitx5', 'ibus'];
+const IM_FRAMEWORK_LABELS = ['自动检测', 'Fcitx5', 'IBus'];
 
 export default class ImeBridgePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -26,6 +30,23 @@ export default class ImeBridgePreferences extends ExtensionPreferences {
         });
         scriptRow.add_suffix(scriptEntry);
 
+        const frameworkModel = new Gtk.StringList();
+        IM_FRAMEWORK_LABELS.forEach(label => frameworkModel.append(label));
+
+        const frameworkRow = new Adw.ComboRow({
+            title: '输入框架',
+            subtitle: '自动检测系统上正在运行的输入框架，也可手动指定',
+            model: frameworkModel,
+        });
+        const frameworkSelected = () => {
+            const index = IM_FRAMEWORK_KEYS.indexOf(settings.get_string(IM_FRAMEWORK_KEY));
+            return Math.max(0, index);
+        };
+        frameworkRow.selected = frameworkSelected();
+        frameworkRow.connect('notify::selected', row => {
+            settings.set_string(IM_FRAMEWORK_KEY, IM_FRAMEWORK_KEYS[row.selected]);
+        });
+
         const shortcutRow = new Adw.ActionRow({
             title: '全局快捷键',
             subtitle: '点击右侧按钮后直接按下新快捷键，Esc 取消，BackSpace 清除',
@@ -36,6 +57,7 @@ export default class ImeBridgePreferences extends ExtensionPreferences {
             title: 'IME Bridge',
         });
         group.add(scriptRow);
+        group.add(frameworkRow);
         group.add(shortcutRow);
 
         const page = new Adw.PreferencesPage();

@@ -235,17 +235,17 @@ export default class ImeBridgeExtension extends Extension {
   /**
    * Prepare the input method for the dialog.
    *
-   * - Fcitx5 is switched right away, before the dialog steals focus
-   *   (the switch is applied by Fcitx5 itself to the focused window).
-   * - IBus engines are driven by GNOME Shell's input source manager,
-   *   and Shell may re-apply its own source when the dialog window
-   *   gains focus (per-window sources). Remember the state *now*, then
-   *   do the actual switch once the dialog is fully open and focused.
+   * Both backends wait for the dialog's "opened" signal, which is
+   * emitted once the opening animation finished and the entry holds
+   * keyboard focus. Switching earlier targets the wrong thing:
+   * Fcitx5 applies SetCurrentIM to the focused input context, and
+   * Shell re-applies its own input source when the dialog window
+   * gains focus (per-window sources).
    */
   _switchInputSource() {
     switch (this._imFramework) {
       case "fcitx5":
-        this._switchFcitxToIme();
+        this._dialog.connect("opened", () => this._switchFcitxToIme());
         break;
       case "ibus": {
         this._ibusSwitched = false;
@@ -288,13 +288,16 @@ export default class ImeBridgeExtension extends Extension {
   }
 
   _switchFcitxToIme() {
+    if (!this._dialog)
+      return;
+
     try {
       const curResult = this._fcitxCall("CurrentInputMethod", "(s)");
       const [currentIM] = curResult.deepUnpack();
 
       const imResult = this._fcitxCall(
         "AvailableInputMethods",
-        "(a(sssssssb))",
+        "(a(ssssssb))",
       );
 
       const methods = imResult.deepUnpack()[0];
